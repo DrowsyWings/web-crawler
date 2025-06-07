@@ -3,10 +3,10 @@ package models
 import "time"
 
 type CrawlResult struct {
-	url       string
-	title     string
-	timestamp string
-	status    string
+	Url       string
+	Title     string
+	Timestamp string
+	Status    string
 }
 
 type CrawlConfig struct {
