@@ -10,15 +10,15 @@ type CrawlResult struct {
 }
 
 type CrawlConfig struct {
-	seedUrl            string
-	depth              string
-	domainRestrictions string
-	rateLimits         string
+	SeedUrl            string
+	Depth              string
+	DomainRestrictions string
+	RateLimits         string
 }
 
 type CrawlStats struct {
-	pagesCrawled int16
-	queued       int16
-	errors       string
-	elapsedTime  time.Time
+	PagesCrawled int16
+	Queued       int16
+	Errors       string
+	ElapsedTime  time.Time
 }

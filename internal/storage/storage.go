@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 	"web-crawler/pkg/models"
 
@@ -68,8 +69,7 @@ func MarkVisited(db *bolt.DB, url string) error {
 		if a == nil {
 			return bolt.ErrBucketNotFound
 		}
-		timestamp := time.Now().Format(time.RFC3339)
-		return a.Put([]byte(url), []byte(timestamp))
+		return a.Put([]byte(url), []byte(strconv.FormatBool(true)))
 
 	})
 
@@ -110,7 +110,7 @@ func SaveResult(db *bolt.DB, result models.CrawlResult) error {
 	return db.Update(func(tx *bolt.Tx) error {
 		a := tx.Bucket([]byte("results"))
 
-		if a != nil {
+		if a == nil {
 			return bolt.ErrBucketNotFound
 		}
 		return a.Put([]byte(result.Url), data)
