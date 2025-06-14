@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"web-crawler/internal/parser"
+	"web-crawler/internal/stats"
 	"web-crawler/internal/storage"
 	"web-crawler/pkg/models"
 
@@ -31,9 +32,10 @@ type Crawler struct {
 	MaxDepth int
 	Workers  int
 	Delay    time.Duration
+	Stats    *stats.Stats
 }
 
-func NewCrawler(config models.CrawlConfig, db *bolt.DB) *Crawler {
+func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats) *Crawler {
 	parsedURL, _ := url.Parse(config.SeedUrl)
 
 	depth := 2
@@ -56,12 +58,16 @@ func NewCrawler(config models.CrawlConfig, db *bolt.DB) *Crawler {
 		MaxDepth: depth,
 		Workers:  workers,
 		Delay:    delay,
+		Stats:    stats,
 	}
 }
 
 func (c *Crawler) Start() {
-	// Enqueue
 	c.Queue <- Task{URL: c.Config.SeedUrl, Depth: 0}
+	c.Stats.QueuedCh <- struct{}{}
+
+	go c.Stats.StartReporting()
+	defer func() { c.Stats.DoneCh <- struct{}{} }()
 
 	for i := 0; i < c.Workers; i++ {
 		c.WG.Add(1)
@@ -87,16 +93,19 @@ func (c *Crawler) runWorker() {
 
 		res, err := http.Get(task.URL)
 		if err != nil || res.StatusCode != 200 {
+			c.Stats.ErrorCh <- struct{}{}
 			continue
 		}
 		body, err := io.ReadAll(res.Body)
 		res.Body.Close()
 		if err != nil {
+			c.Stats.ErrorCh <- struct{}{}
 			continue
 		}
 
 		result, err := parser.ParseHTML(task.URL, string(body))
 		if err != nil {
+			c.Stats.ErrorCh <- struct{}{}
 			continue
 		}
 
@@ -110,6 +119,7 @@ func (c *Crawler) runWorker() {
 			Status:    res.Status,
 		}
 		storage.SaveResult(c.DB, crawlData)
+		c.Stats.CrawledCh <- struct{}{}
 
 		for _, link := range result.Links {
 			linkURL, _ := url.Parse(link)
@@ -118,6 +128,7 @@ func (c *Crawler) runWorker() {
 			}
 			if !c.isVisitedInMemory(link) {
 				c.Queue <- Task{URL: link, Depth: task.Depth + 1}
+				c.Stats.QueuedCh <- struct{}{}
 			}
 		}
 
