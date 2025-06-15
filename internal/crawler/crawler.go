@@ -81,32 +81,48 @@ func (c *Crawler) Start() {
 
 func (c *Crawler) runWorker() {
 	defer c.WG.Done()
+	timeout := 10 * time.Second
 
-	for task := range c.Queue {
+	for {
+		select {
+		case task, ok := <-c.Queue:
+			if !ok {
+				return
+			}
+			c.processTask(task)
+
+		case <-time.After(timeout):
+			fmt.Println("Worker timeout")
+			return
+		}
+	}
+}
+
+func (c *Crawler) processTask(task Task) {
 		if task.Depth > c.MaxDepth {
-			continue
+			return
 		}
 
 		if isVisited, _ := storage.IsVisited(c.DB, task.URL); isVisited || c.isVisitedInMemory(task.URL) {
-			continue
+			return
 		}
 
 		res, err := http.Get(task.URL)
 		if err != nil || res.StatusCode != 200 {
 			c.Stats.ErrorCh <- struct{}{}
-			continue
+			return
 		}
 		body, err := io.ReadAll(res.Body)
 		res.Body.Close()
 		if err != nil {
 			c.Stats.ErrorCh <- struct{}{}
-			continue
+			return
 		}
 
 		result, err := parser.ParseHTML(task.URL, string(body))
 		if err != nil {
 			c.Stats.ErrorCh <- struct{}{}
-			continue
+			return
 		}
 
 		storage.MarkVisited(c.DB, task.URL)
@@ -133,7 +149,7 @@ func (c *Crawler) runWorker() {
 		}
 
 		time.Sleep(c.Delay)
-	}
+
 }
 
 func (c *Crawler) isVisitedInMemory(url string) bool {

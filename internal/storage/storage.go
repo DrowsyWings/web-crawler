@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
-	"time"
 	"web-crawler/pkg/models"
 
 	"github.com/boltdb/bolt"
@@ -14,15 +12,9 @@ import (
 
 var alreadyVisited = errors.New("visited")
 
-func Init() error {
-	db, err := bolt.Open("storage.db", 0600, &bolt.Options{Timeout: 1 * time.Second})
+func Init(db *bolt.DB) error {
 
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	err = db.Update(func(tx *bolt.Tx) error {
+	err := db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("visited"))
 		if err != nil {
 			return fmt.Errorf("could not create bucket: %v", err)
@@ -132,4 +124,26 @@ func GetQueue(db *bolt.DB) ([]string, error) {
 		})
 	})
 	return queue, err
+}
+
+func ExportResults(db *bolt.DB) ([]models.CrawlResult, error) {
+	var results []models.CrawlResult
+
+	err := db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("results"))
+		if b == nil {
+			return bolt.ErrBucketNotFound
+		}
+
+		return b.ForEach(func(k, v []byte) error {
+			var result models.CrawlResult
+			if err := json.Unmarshal(v, &result); err != nil {
+				return err
+			}
+			results = append(results, result)
+			return nil
+		})
+	})
+
+	return results, err
 }
