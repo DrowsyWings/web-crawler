@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"web-crawler/internal/parser"
@@ -33,6 +34,10 @@ type Crawler struct {
 	Workers  int
 	Delay    time.Duration
 	Stats    *stats.Stats
+
+	activeWorkers int64
+	pendingWork   int64 
+	done          chan struct{}
 }
 
 func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats) *Crawler {
@@ -59,51 +64,77 @@ func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats) *Cra
 		Workers:  workers,
 		Delay:    delay,
 		Stats:    stats,
+		done:     make(chan struct{}),
 	}
 }
 
 func (c *Crawler) Start() {
-	c.Queue <- Task{URL: c.Config.SeedUrl, Depth: 0}
-	c.Stats.QueuedCh <- struct{}{}
 
 	go c.Stats.StartReporting()
 	defer func() { c.Stats.DoneCh <- struct{}{} }()
+
+	c.addTask(Task{URL: c.Config.SeedUrl, Depth: 0})
 
 	for i := 0; i < c.Workers; i++ {
 		c.WG.Add(1)
 		go c.runWorker()
 	}
 
-	c.WG.Wait()
+	go c.monitorCompletion()
+
+	<-c.done
 	close(c.Queue)
+	c.WG.Wait()
 	fmt.Println("Crawling complete.")
+}
+
+func (c *Crawler) addTask(task Task) {
+	c.Queue <- task
+	atomic.AddInt64(&c.pendingWork, 1)
 }
 
 func (c *Crawler) runWorker() {
 	defer c.WG.Done()
-	timeout := 10 * time.Second
+
+	for task := range c.Queue {
+		atomic.AddInt64(&c.activeWorkers, 1)
+		atomic.AddInt64(&c.pendingWork, -1)
+
+		c.processTask(task)
+
+		atomic.AddInt64(&c.activeWorkers, -1)
+	}
+}
+
+func (c *Crawler) monitorCompletion() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case task, ok := <-c.Queue:
-			if !ok {
-				return
+		case <-ticker.C:
+			if atomic.LoadInt64(&c.pendingWork) == 0 && atomic.LoadInt64(&c.activeWorkers) == 0 {
+				time.Sleep(100 * time.Millisecond)
+				if atomic.LoadInt64(&c.pendingWork) == 0 && atomic.LoadInt64(&c.activeWorkers) == 0 {
+					close(c.done)
+					return
+				}
 			}
-			c.processTask(task)
-
-		case <-time.After(timeout):
-			fmt.Println("Worker timeout")
-			return
 		}
 	}
 }
 
 func (c *Crawler) processTask(task Task) {
-		if task.Depth > c.MaxDepth {
-			return
-		}
+	c.Stats.InProgressCh <- struct{}{}
+	defer func() { c.Stats.CompletedCh <- struct{}{} }()
+
+	if task.Depth > c.MaxDepth {
+		c.Stats.FilteredCh <- struct{}{} 
+		return
+	}
 
 		if isVisited, _ := storage.IsVisited(c.DB, task.URL); isVisited || c.isVisitedInMemory(task.URL) {
+			c.Stats.DuplicateCh <- struct{}{}
 			return
 		}
 
@@ -140,13 +171,22 @@ func (c *Crawler) processTask(task Task) {
 		for _, link := range result.Links {
 			linkURL, _ := url.Parse(link)
 			if linkURL.Host != c.Domain {
+				c.Stats.FilteredCh <- struct{}{}
 				continue
 			}
 			if !c.isVisitedInMemory(link) {
-				c.Queue <- Task{URL: link, Depth: task.Depth + 1}
-				c.Stats.QueuedCh <- struct{}{}
+				select {
+				case <-c.done:
+					return
+				default:
+					c.addTask(Task{URL: link, Depth: task.Depth + 1})
+					c.Stats.FoundCh <- struct{}{}
+				}
+			} else {
+			c.Stats.DuplicateCh <- struct{}{} 
 			}
 		}
+	c.Stats.QueueSizeCh <- len(c.Queue)
 
 		time.Sleep(c.Delay)
 

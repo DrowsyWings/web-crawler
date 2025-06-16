@@ -44,8 +44,6 @@ var crawlCmd = &cobra.Command{
 		}
 
 		s := stats.NewStats()
-		go s.StartReporting()
-		defer func() { s.DoneCh <- struct{}{} }()
 
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
