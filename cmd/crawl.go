@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -43,14 +44,14 @@ var crawlCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
-		s := stats.NewStats()
+		stats := stats.NewStats()
 
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			<-quit
 			log.Println("Interrupted")
-			s.DoneCh <- struct{}{}
+			stats.DoneCh <- struct{}{}
 			os.Exit(0)
 		}()
 
@@ -61,7 +62,7 @@ var crawlCmd = &cobra.Command{
 			DomainRestrictions: delay,
 		}
 
-		c := crawler.NewCrawler(config, db, s)
+		c := crawler.NewCrawler(config, db, stats,http.DefaultClient)
 		c.Start()
 
 		if outputPath != "" {

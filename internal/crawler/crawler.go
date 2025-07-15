@@ -16,7 +16,9 @@ import (
 
 	"github.com/boltdb/bolt"
 )
-
+type HTTPClient interface {
+	Get(string) (*http.Response, error)
+}
 type Task struct {
 	URL   string
 	Depth int
@@ -38,9 +40,10 @@ type Crawler struct {
 	activeWorkers int64
 	pendingWork   int64 
 	done          chan struct{}
+	HTTPClient HTTPClient
 }
 
-func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats) *Crawler {
+func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats, client HTTPClient) *Crawler {
 	parsedURL, _ := url.Parse(config.SeedUrl)
 
 	depth := 2
@@ -65,6 +68,7 @@ func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats) *Cra
 		Delay:    delay,
 		Stats:    stats,
 		done:     make(chan struct{}),
+		HTTPClient: client,
 	}
 }
 
@@ -138,7 +142,7 @@ func (c *Crawler) processTask(task Task) {
 			return
 		}
 
-		res, err := http.Get(task.URL)
+		res, err := c.HTTPClient.Get(task.URL)
 		if err != nil || res.StatusCode != 200 {
 			c.Stats.ErrorCh <- struct{}{}
 			return
