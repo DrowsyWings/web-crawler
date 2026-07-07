@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"web-crawler/internal/stats"
-	"web-crawler/pkg/models"
+	"github.com/DrowsyWings/web-crawler/internal/stats"
+	"github.com/DrowsyWings/web-crawler/pkg/models"
 
 	"github.com/boltdb/bolt"
 	"github.com/stretchr/testify/assert"

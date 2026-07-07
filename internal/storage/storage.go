@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"web-crawler/pkg/models"
+	"github.com/DrowsyWings/web-crawler/pkg/models"
 
 	"github.com/boltdb/bolt"
 )

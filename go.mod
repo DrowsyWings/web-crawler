@@ -1,4 +1,4 @@
-module web-crawler
+module github.com/DrowsyWings/web-crawler
 
 go 1.24.2
 

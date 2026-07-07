@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"web-crawler/internal/parser"
-	"web-crawler/internal/stats"
-	"web-crawler/internal/storage"
-	"web-crawler/pkg/models"
+	"github.com/DrowsyWings/web-crawler/internal/parser"
+	"github.com/DrowsyWings/web-crawler/internal/stats"
+	"github.com/DrowsyWings/web-crawler/internal/storage"
+	"github.com/DrowsyWings/web-crawler/pkg/models"
 
 	"github.com/boltdb/bolt"
 )
