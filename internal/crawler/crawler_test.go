@@ -12,7 +12,7 @@ import (
 	"github.com/DrowsyWings/web-crawler/internal/stats"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

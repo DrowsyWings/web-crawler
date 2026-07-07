@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 var alreadyVisited = errors.New("visited")
@@ -16,18 +16,6 @@ func Init(db *bolt.DB) error {
 
 	err := db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte("visited"))
-		if err != nil {
-			return fmt.Errorf("could not create bucket: %v", err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("could not setup bucket: %v", err)
-	}
-
-	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("queue"))
 		if err != nil {
 			return fmt.Errorf("could not create bucket: %v", err)
 		}
@@ -107,23 +95,6 @@ func SaveResult(db *bolt.DB, result models.CrawlResult) error {
 		}
 		return a.Put([]byte(result.Url), data)
 	})
-}
-
-func GetQueue(db *bolt.DB) ([]string, error) {
-	var queue []string
-	err := db.View(func(tx *bolt.Tx) error {
-		a := tx.Bucket([]byte("queue"))
-
-		if a == nil {
-			return bolt.ErrBucketNotFound
-		}
-
-		return a.ForEach(func(k []byte, _ []byte) error {
-			queue = append(queue, string(k))
-			return nil
-		})
-	})
-	return queue, err
 }
 
 func ExportResults(db *bolt.DB) ([]models.CrawlResult, error) {

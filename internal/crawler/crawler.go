@@ -14,7 +14,7 @@ import (
 	"github.com/DrowsyWings/web-crawler/internal/storage"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 )
 type HTTPClient interface {
 	Get(string) (*http.Response, error)
