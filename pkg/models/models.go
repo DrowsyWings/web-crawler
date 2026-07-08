@@ -1,5 +1,7 @@
 package models
 
+import "time"
+
 type CrawlResult struct {
 	Url       string
 	Title     string
@@ -7,9 +9,11 @@ type CrawlResult struct {
 	Status    string
 }
 
-type CrawlConfig struct {
-	SeedUrl            string
-	Depth              string
-	DomainRestrictions string
-	RateLimits         string
+type Config struct {
+	SeedURL  string
+	MaxDepth int
+	Workers  int
+	Delay    time.Duration
+	Timeout  time.Duration
+	JobID    string
 }

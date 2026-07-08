@@ -25,7 +25,7 @@ type Task struct {
 }
 
 type Crawler struct {
-	Config   models.CrawlConfig
+	Config   models.Config
 	DB       *bolt.DB
 	Visited  map[string]bool
 	VisitedM sync.Mutex
@@ -43,19 +43,8 @@ type Crawler struct {
 	HTTPClient HTTPClient
 }
 
-func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats, client HTTPClient) *Crawler {
-	parsedURL, _ := url.Parse(config.SeedUrl)
-
-	depth := 2
-	fmt.Sscanf(config.Depth, "%d", &depth)
-
-	workers := 4
-	fmt.Sscanf(config.RateLimits, "%d", &workers)
-
-	delay := 0 * time.Second
-	if d, err := time.ParseDuration(config.DomainRestrictions); err == nil {
-		delay = d
-	}
+func NewCrawler(config models.Config, db *bolt.DB, stats *stats.Stats, client HTTPClient) *Crawler {
+	parsedURL, _ := url.Parse(config.SeedURL)
 
 	return &Crawler{
 		Config:   config,
@@ -63,9 +52,9 @@ func NewCrawler(config models.CrawlConfig, db *bolt.DB, stats *stats.Stats, clie
 		Visited:  make(map[string]bool),
 		Queue:    make(chan Task, 1000),
 		Domain:   parsedURL.Host,
-		MaxDepth: depth,
-		Workers:  workers,
-		Delay:    delay,
+		MaxDepth: config.MaxDepth,
+		Workers:  config.Workers,
+		Delay:    config.Delay,
 		Stats:    stats,
 		done:     make(chan struct{}),
 		HTTPClient: client,
@@ -77,7 +66,7 @@ func (c *Crawler) Start() {
 	go c.Stats.StartReporting()
 	defer func() { c.Stats.DoneCh <- struct{}{} }()
 
-	c.addTask(Task{URL: c.Config.SeedUrl, Depth: 0})
+	c.addTask(Task{URL: c.Config.SeedURL, Depth: 0})
 
 	for i := 0; i < c.Workers; i++ {
 		c.WG.Add(1)

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
 	"github.com/DrowsyWings/web-crawler/internal/crawler"
 	"github.com/DrowsyWings/web-crawler/internal/stats"
 	"github.com/DrowsyWings/web-crawler/internal/storage"
@@ -19,9 +21,10 @@ import (
 
 var (
 	urlFlag    string
-	depthFlag  string
-	workers    string
-	delay      string
+	depthFlag  int
+	workers    int
+	delay      time.Duration
+	timeout    time.Duration
 	outputPath string
 )
 
@@ -55,11 +58,12 @@ var crawlCmd = &cobra.Command{
 			os.Exit(0)
 		}()
 
-		config := models.CrawlConfig{
-			SeedUrl:            urlFlag,
-			Depth:              depthFlag,
-			RateLimits:         workers,
-			DomainRestrictions: delay,
+		config := models.Config{
+			SeedURL:  urlFlag,
+			MaxDepth: depthFlag,
+			Workers:  workers,
+			Delay:    delay,
+			Timeout:  timeout,
 		}
 
 		c := crawler.NewCrawler(config, db, stats,http.DefaultClient)
@@ -92,9 +96,10 @@ var crawlCmd = &cobra.Command{
 
 func init() {
 	crawlCmd.Flags().StringVar(&urlFlag, "url", "", "Seed URL")
-	crawlCmd.Flags().StringVar(&depthFlag, "depth", "2", "Maximum crawl depth")
-	crawlCmd.Flags().StringVar(&workers, "workers", "4", "Number of workers")
-	crawlCmd.Flags().StringVar(&delay, "delay", "0", "Delay between requests")
+	crawlCmd.Flags().IntVar(&depthFlag, "depth", 2, "Maximum crawl depth")
+	crawlCmd.Flags().IntVar(&workers, "workers", 4, "Number of workers")
+	crawlCmd.Flags().DurationVar(&delay, "delay", 0, "Delay between requests (e.g. 500ms, 1s)")
+	crawlCmd.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "Per-request HTTP timeout")
 	crawlCmd.Flags().StringVar(&outputPath, "output", "", "Path to JSON file")
 
 	rootCmd.AddCommand(crawlCmd)

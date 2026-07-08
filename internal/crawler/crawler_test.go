@@ -65,11 +65,11 @@ func makeTestDb(t *testing.T) *bolt.DB {
 }
 
 func TestNewCrawler(t *testing.T) {
-	c := models.CrawlConfig{
-		SeedUrl: "https://example.com",
-		Depth: "3",
-		RateLimits: "5",
-		DomainRestrictions: "1s",
+	c := models.Config{
+		SeedURL:  "https://example.com",
+		MaxDepth: 3,
+		Workers:  5,
+		Delay:    time.Second,
 	}
 	db := makeTestDb(t)
 	defer db.Close()
@@ -90,25 +90,8 @@ func TestNewCrawler(t *testing.T) {
 	assert.NotNil(t, cr.done)
 }
 
-func TestNewCrawlerDefaults(t *testing.T) {
-	c := models.CrawlConfig{
-		SeedUrl: "https://example.com",
-		Depth: "invalid",
-		RateLimits: "invalid",
-		DomainRestrictions: "invalid",
-	}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{}
-	client := &mockHttp{}
-	cr := NewCrawler(c, db, st, client)
-	assert.Equal(t, 2, cr.MaxDepth)
-	assert.Equal(t, 4, cr.Workers)
-	assert.Equal(t, time.Duration(0), cr.Delay)
-}
-
 func TestAddTask(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com"}
 	db := makeTestDb(t)
 	defer db.Close()
 	cr := NewCrawler(c, db, &stats.Stats{}, &mockHttp{})
@@ -150,7 +133,7 @@ func TestMarkInMemoryVisited(t *testing.T) {
 }
 
 func TestProcessTaskSuccess(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
 	db := makeTestDb(t)
 	defer db.Close()
 	st := &stats.Stats{
@@ -182,7 +165,7 @@ func TestProcessTaskSuccess(t *testing.T) {
 }
 
 func TestProcessTaskDepthExceeded(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com", Depth: "1"}
+	c := models.Config{SeedURL: "https://example.com", MaxDepth: 1}
 	db := makeTestDb(t)
 	defer db.Close()
 	st := &stats.Stats{
@@ -201,7 +184,7 @@ func TestProcessTaskDepthExceeded(t *testing.T) {
 }
 
 func TestProcessTaskHTTPError(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
 	db := makeTestDb(t)
 	defer db.Close()
 	st := &stats.Stats{
@@ -223,7 +206,7 @@ func TestProcessTaskHTTPError(t *testing.T) {
 }
 
 func TestProcessTaskNon200Status(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
 	db := makeTestDb(t)
 	defer db.Close()
 	st := &stats.Stats{
@@ -250,7 +233,7 @@ func TestProcessTaskNon200Status(t *testing.T) {
 }
 
 func TestRunWorker(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com"}
 	db := makeTestDb(t)
 	defer db.Close()
 	st := &stats.Stats{
@@ -304,7 +287,7 @@ func TestRunWorker(t *testing.T) {
 }
 
 func TestMonitorCompletion(t *testing.T) {
-	c := models.CrawlConfig{SeedUrl: "https://example.com"}
+	c := models.Config{SeedURL: "https://example.com"}
 	db := makeTestDb(t)
 	defer db.Close()
 	cr := NewCrawler(c, db, &stats.Stats{}, &mockHttp{})
