@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -49,14 +50,8 @@ var crawlCmd = &cobra.Command{
 
 		stats := stats.NewStats()
 
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			<-quit
-			log.Println("Interrupted")
-			stats.DoneCh <- struct{}{}
-			os.Exit(0)
-		}()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
 		config := models.Config{
 			SeedURL:  urlFlag,
@@ -66,8 +61,9 @@ var crawlCmd = &cobra.Command{
 			Timeout:  timeout,
 		}
 
-		c := crawler.NewCrawler(config, db, stats,http.DefaultClient)
-		c.Start()
+		httpClient := &http.Client{Timeout: config.Timeout}
+		c := crawler.NewCrawler(config, db, stats, httpClient)
+		c.Start(ctx)
 
 		if outputPath != "" {
 			results, err := storage.ExportResults(db)

@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,11 +40,11 @@ var htmlData = `
 	</html>
 `
 
-func (m *mockHttp) Get(u string) (*http.Response, error) {
+func (m *mockHttp) Do(req *http.Request) (*http.Response, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	if r, ok := m.res[u]; ok {
+	if r, ok := m.res[req.URL.String()]; ok {
 		return r, nil
 	}
 	return &http.Response{
@@ -146,7 +147,7 @@ func TestProcessTaskSuccess(t *testing.T) {
 	client := &mockHttp{}
 	cr := NewCrawler(c, db, st, client)
 	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(task)
+	go cr.processTask(context.Background(), task)
 	select {
 	case <-st.InProgressCh:
 	case <-time.After(100 * time.Millisecond):
@@ -175,7 +176,7 @@ func TestProcessTaskDepthExceeded(t *testing.T) {
 	}
 	cr := NewCrawler(c, db, st, &mockHttp{})
 	task := Task{URL: "https://example.com/test", Depth: 5}
-	go cr.processTask(task)
+	go cr.processTask(context.Background(), task)
 	select {
 	case <-st.FilteredCh:
 	case <-time.After(100 * time.Millisecond):
@@ -197,7 +198,7 @@ func TestProcessTaskHTTPError(t *testing.T) {
 	}
 	cr := NewCrawler(c, db, st, client)
 	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(task)
+	go cr.processTask(context.Background(), task)
 	select {
 	case <-st.ErrorCh:
 	case <-time.After(100 * time.Millisecond):
@@ -224,7 +225,7 @@ func TestProcessTaskNon200Status(t *testing.T) {
 	}
 	cr := NewCrawler(c, db, st, client)
 	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(task)
+	go cr.processTask(context.Background(), task)
 	select {
 	case <-st.ErrorCh:
 	case <-time.After(100 * time.Millisecond):
@@ -272,7 +273,7 @@ func TestRunWorker(t *testing.T) {
 		close(cr.Queue)
 	}()
 	cr.WG.Add(1)
-	go cr.runWorker()
+	go cr.runWorker(context.Background())
 	workerDone := make(chan bool)
 	go func() {
 		cr.WG.Wait()

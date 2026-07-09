@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 type HTTPClient interface {
-	Get(string) (*http.Response, error)
+	Do(*http.Request) (*http.Response, error)
 }
 type Task struct {
 	URL   string
@@ -61,7 +62,7 @@ func NewCrawler(config models.Config, db *bolt.DB, stats *stats.Stats, client HT
 	}
 }
 
-func (c *Crawler) Start() {
+func (c *Crawler) Start(ctx context.Context) {
 
 	go c.Stats.StartReporting()
 	defer func() { c.Stats.DoneCh <- struct{}{} }()
@@ -70,13 +71,20 @@ func (c *Crawler) Start() {
 
 	for i := 0; i < c.Workers; i++ {
 		c.WG.Add(1)
-		go c.runWorker()
+		go c.runWorker(ctx)
 	}
 
 	go c.monitorCompletion()
 
-	<-c.done
-	close(c.Queue)
+	select {
+	case <-c.done:
+		// Crawl finished naturally: close the queue so workers drain and exit.
+		close(c.Queue)
+	case <-ctx.Done():
+		// Interrupted: workers exit via ctx; leave the queue open so a worker
+		// mid-task can't send on a closed channel.
+		fmt.Println("Shutdown requested, stopping...")
+	}
 	c.WG.Wait()
 	fmt.Println("Crawling complete.")
 }
@@ -86,16 +94,24 @@ func (c *Crawler) addTask(task Task) {
 	atomic.AddInt64(&c.pendingWork, 1)
 }
 
-func (c *Crawler) runWorker() {
+func (c *Crawler) runWorker(ctx context.Context) {
 	defer c.WG.Done()
 
-	for task := range c.Queue {
-		atomic.AddInt64(&c.activeWorkers, 1)
-		atomic.AddInt64(&c.pendingWork, -1)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task, ok := <-c.Queue:
+			if !ok {
+				return
+			}
+			atomic.AddInt64(&c.activeWorkers, 1)
+			atomic.AddInt64(&c.pendingWork, -1)
 
-		c.processTask(task)
+			c.processTask(ctx, task)
 
-		atomic.AddInt64(&c.activeWorkers, -1)
+			atomic.AddInt64(&c.activeWorkers, -1)
+		}
 	}
 }
 
@@ -117,12 +133,12 @@ func (c *Crawler) monitorCompletion() {
 	}
 }
 
-func (c *Crawler) processTask(task Task) {
+func (c *Crawler) processTask(ctx context.Context, task Task) {
 	c.Stats.InProgressCh <- struct{}{}
 	defer func() { c.Stats.CompletedCh <- struct{}{} }()
 
 	if task.Depth > c.MaxDepth {
-		c.Stats.FilteredCh <- struct{}{} 
+		c.Stats.FilteredCh <- struct{}{}
 		return
 	}
 
@@ -131,7 +147,12 @@ func (c *Crawler) processTask(task Task) {
 			return
 		}
 
-		res, err := c.HTTPClient.Get(task.URL)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, task.URL, nil)
+		if err != nil {
+			c.Stats.ErrorCh <- struct{}{}
+			return
+		}
+		res, err := c.HTTPClient.Do(req)
 		if err != nil || res.StatusCode != 200 {
 			c.Stats.ErrorCh <- struct{}{}
 			return
