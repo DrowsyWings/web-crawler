@@ -10,16 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DrowsyWings/web-crawler/internal/frontier"
 	"github.com/DrowsyWings/web-crawler/internal/stats"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
-	bolt "go.etcd.io/bbolt"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 type mockHttp struct {
-	mock.Mock
 	res map[string]*http.Response
 	err error
 }
@@ -54,272 +52,146 @@ func (m *mockHttp) Do(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func makeTestDb(t *testing.T) *bolt.DB {
-	db, e := bolt.Open(":memory:", 0600, nil)
-	assert.NoError(t, e)
-	db.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucket([]byte("visited"))
-		tx.CreateBucket([]byte("results"))
-		return nil
-	})
-	return db
+type fakeStore struct {
+	mu      sync.Mutex
+	results []models.CrawlResult
+}
+
+func (s *fakeStore) SaveResult(ctx context.Context, r models.CrawlResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.results = append(s.results, r)
+	return nil
+}
+
+func (s *fakeStore) ExportResults(ctx context.Context) ([]models.CrawlResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]models.CrawlResult(nil), s.results...), nil
+}
+
+func (s *fakeStore) Close() error { return nil }
+
+func newTestStats() *stats.Stats {
+	return &stats.Stats{
+		CrawledCh:    make(chan struct{}, 100),
+		FoundCh:      make(chan struct{}, 100),
+		DuplicateCh:  make(chan struct{}, 100),
+		FilteredCh:   make(chan struct{}, 100),
+		InProgressCh: make(chan struct{}, 100),
+		CompletedCh:  make(chan struct{}, 100),
+		ErrorCh:      make(chan struct{}, 100),
+		QueueSizeCh:  make(chan int, 100),
+	}
+}
+
+func assertRecv[T any](t *testing.T, ch <-chan T, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Errorf("expected %s signal", name)
+	}
 }
 
 func TestNewCrawler(t *testing.T) {
-	c := models.Config{
-		SeedURL:  "https://example.com",
-		MaxDepth: 3,
-		Workers:  5,
-		Delay:    time.Second,
-	}
-	db := makeTestDb(t)
-	defer db.Close()
+	cfg := models.Config{SeedURL: "https://example.com", MaxDepth: 3, Workers: 5, Delay: time.Second}
 	st := &stats.Stats{}
 	client := &mockHttp{}
-	cr := NewCrawler(c, db, st, client)
-	assert.NotNil(t, cr)
+	cr := NewCrawler(cfg, frontier.NewMemory(10), &fakeStore{}, st, client)
+
 	assert.Equal(t, "example.com", cr.Domain)
 	assert.Equal(t, 3, cr.MaxDepth)
 	assert.Equal(t, 5, cr.Workers)
 	assert.Equal(t, time.Second, cr.Delay)
-	assert.Equal(t, c, cr.Config)
-	assert.Equal(t, db, cr.DB)
+	assert.Equal(t, cfg, cr.Config)
 	assert.Equal(t, st, cr.Stats)
 	assert.Equal(t, client, cr.HTTPClient)
-	assert.NotNil(t, cr.Visited)
-	assert.NotNil(t, cr.Queue)
-	assert.NotNil(t, cr.done)
-}
-
-func TestAddTask(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com"}
-	db := makeTestDb(t)
-	defer db.Close()
-	cr := NewCrawler(c, db, &stats.Stats{}, &mockHttp{})
-	task := Task{URL: "https://example.com/test", Depth: 1}
-	cr.addTask(task)
-	assert.Equal(t, int64(1), cr.pendingWork)
-	select {
-	case got := <-cr.Queue:
-		assert.Equal(t, task.URL, got.URL)
-		assert.Equal(t, task.Depth, got.Depth)
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no task")
-	}
-}
-
-func TestIsVisitedInMemory(t *testing.T) {
-	c := &Crawler{
-		Visited: map[string]bool{},
-		VisitedM: sync.Mutex{},
-	}
-	u := "https://example.com"
-	assert.False(t, c.isVisitedInMemory(u))
-	c.markInMemoryVisited(u)
-	assert.True(t, c.isVisitedInMemory(u))
-}
-
-func TestMarkInMemoryVisited(t *testing.T) {
-	c := &Crawler{
-		Visited: map[string]bool{},
-		VisitedM: sync.Mutex{},
-	}
-	u := "https://example.com"
-	c.markInMemoryVisited(u)
-	c.VisitedM.Lock()
-	defer c.VisitedM.Unlock()
-	if !c.Visited[u] {
-		t.Errorf("expected URL %q visited", u)
-	}
+	assert.NotNil(t, cr.Frontier)
+	assert.NotNil(t, cr.Store)
 }
 
 func TestProcessTaskSuccess(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{
-		InProgressCh: make(chan struct{}, 10),
-		CompletedCh: make(chan struct{}, 10),
-		CrawledCh: make(chan struct{}, 10),
-		FoundCh: make(chan struct{}, 10),
-		QueueSizeCh: make(chan int, 10),
-	}
-	client := &mockHttp{}
-	cr := NewCrawler(c, db, st, client)
-	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(context.Background(), task)
-	select {
-	case <-st.InProgressCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no inprogress")
-	}
-	select {
-	case <-st.CompletedCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no complete")
-	}
-	select {
-	case <-st.CrawledCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no crawled")
-	}
+	st := newTestStats()
+	store := &fakeStore{}
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 2}, frontier.NewMemory(100), store, st, &mockHttp{})
+
+	go cr.processTask(context.Background(), frontier.Task{URL: "https://example.com/test", Depth: 1})
+
+	assertRecv(t, st.InProgressCh, "inprogress")
+	assertRecv(t, st.CrawledCh, "crawled")
+	assertRecv(t, st.CompletedCh, "complete")
+
+	results, _ := store.ExportResults(context.Background())
+	assert.Len(t, results, 1)
+	assert.Equal(t, "Test Page", results[0].Title)
 }
 
 func TestProcessTaskDepthExceeded(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com", MaxDepth: 1}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{
-		InProgressCh: make(chan struct{}, 10),
-		CompletedCh: make(chan struct{}, 10),
-		FilteredCh: make(chan struct{}, 10),
-	}
-	cr := NewCrawler(c, db, st, &mockHttp{})
-	task := Task{URL: "https://example.com/test", Depth: 5}
-	go cr.processTask(context.Background(), task)
-	select {
-	case <-st.FilteredCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no filter")
-	}
+	st := newTestStats()
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 1}, frontier.NewMemory(100), &fakeStore{}, st, &mockHttp{})
+
+	go cr.processTask(context.Background(), frontier.Task{URL: "https://example.com/test", Depth: 5})
+
+	assertRecv(t, st.FilteredCh, "filtered")
 }
 
 func TestProcessTaskHTTPError(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{
-		InProgressCh: make(chan struct{}, 10),
-		CompletedCh: make(chan struct{}, 10),
-		ErrorCh: make(chan struct{}, 10),
-	}
-	client := &mockHttp{
-		err: fmt.Errorf("network error"),
-	}
-	cr := NewCrawler(c, db, st, client)
-	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(context.Background(), task)
-	select {
-	case <-st.ErrorCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no error ch")
-	}
+	st := newTestStats()
+	client := &mockHttp{err: fmt.Errorf("network error")}
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 2}, frontier.NewMemory(100), &fakeStore{}, st, client)
+
+	go cr.processTask(context.Background(), frontier.Task{URL: "https://example.com/test", Depth: 1})
+
+	assertRecv(t, st.ErrorCh, "error")
 }
 
 func TestProcessTaskNon200Status(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com", MaxDepth: 2}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{
-		InProgressCh: make(chan struct{}, 10),
-		CompletedCh: make(chan struct{}, 10),
-		ErrorCh: make(chan struct{}, 10),
-	}
+	st := newTestStats()
 	client := &mockHttp{
 		res: map[string]*http.Response{
 			"https://example.com/test": {
 				StatusCode: 404,
-				Body: io.NopCloser(strings.NewReader("")),
+				Body:       io.NopCloser(strings.NewReader("")),
 			},
 		},
 	}
-	cr := NewCrawler(c, db, st, client)
-	task := Task{URL: "https://example.com/test", Depth: 1}
-	go cr.processTask(context.Background(), task)
-	select {
-	case <-st.ErrorCh:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("no error")
-	}
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 2}, frontier.NewMemory(100), &fakeStore{}, st, client)
+
+	go cr.processTask(context.Background(), frontier.Task{URL: "https://example.com/test", Depth: 1})
+
+	assertRecv(t, st.ErrorCh, "error")
 }
 
-func TestRunWorker(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com"}
-	db := makeTestDb(t)
-	defer db.Close()
-	st := &stats.Stats{
-		InProgressCh: make(chan struct{}, 10),
-		CompletedCh: make(chan struct{}, 10),
-		CrawledCh: make(chan struct{}, 10),
-		QueueSizeCh: make(chan int, 10),
-		FoundCh: make(chan struct{}, 10),
-		ErrorCh: make(chan struct{}, 10),
-		FilteredCh: make(chan struct{}, 10),
-		DuplicateCh: make(chan struct{}, 10),
-	}
-	cr := NewCrawler(c, db, st, &mockHttp{})
-	done := make(chan bool)
+func TestProcessTaskEnqueuesSameDomainLinks(t *testing.T) {
+	st := newTestStats()
+	f := frontier.NewMemory(100)
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 2}, f, &fakeStore{}, st, &mockHttp{})
+
+	cr.processTask(context.Background(), frontier.Task{URL: "https://example.com", Depth: 0})
+
+	// htmlData exposes two same-domain links; the external one is dropped by the parser.
+	queued, _, _ := f.Pending(context.Background())
+	assert.Equal(t, int64(2), queued)
+}
+
+func TestStartCrawlCompletes(t *testing.T) {
+	st := stats.NewStats()
+	store := &fakeStore{}
+	cr := NewCrawler(models.Config{SeedURL: "https://example.com", MaxDepth: 1, Workers: 2}, frontier.NewMemory(1000), store, st, &mockHttp{})
+
+	done := make(chan struct{})
 	go func() {
-		for {
-			select {
-			case <-st.InProgressCh:
-			case <-st.CompletedCh:
-			case <-st.CrawledCh:
-			case <-st.QueueSizeCh:
-			case <-st.FoundCh:
-			case <-st.ErrorCh:
-			case <-st.FilteredCh:
-			case <-st.DuplicateCh:
-			case <-done:
-				return
-			}
-		}
+		cr.Start(context.Background())
+		close(done)
 	}()
-	defer close(done)
-	task := Task{URL: "https://example.com/test", Depth: 1}
-	cr.addTask(task)
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		close(cr.Queue)
-	}()
-	cr.WG.Add(1)
-	go cr.runWorker(context.Background())
-	workerDone := make(chan bool)
-	go func() {
-		cr.WG.Wait()
-		workerDone <- true
-	}()
+
 	select {
-	case <-workerDone:
+	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("worker timeout")
+		t.Fatal("crawl did not complete")
 	}
-	assert.Equal(t, int64(0), cr.activeWorkers)
-}
 
-func TestMonitorCompletion(t *testing.T) {
-	c := models.Config{SeedURL: "https://example.com"}
-	db := makeTestDb(t)
-	defer db.Close()
-	cr := NewCrawler(c, db, &stats.Stats{}, &mockHttp{})
-	go cr.monitorCompletion()
-	select {
-	case <-cr.done:
-	case <-time.After(2 * time.Second):
-		t.Error("no done")
-	}
-}
-
-func TestConcurrentVisitedAccess(t *testing.T) {
-	c := &Crawler{
-		Visited: map[string]bool{},
-		VisitedM: sync.Mutex{},
-	}
-	var wg sync.WaitGroup
-	uList := []string{
-		"https://example.com/1",
-		"https://example.com/2",
-		"https://example.com/3",
-	}
-	for _, u := range uList {
-		wg.Add(1)
-		go func(x string) {
-			defer wg.Done()
-			c.markInMemoryVisited(x)
-		}(u)
-	}
-	wg.Wait()
-	for _, u := range uList {
-		assert.True(t, c.isVisitedInMemory(u))
-	}
+	results, _ := store.ExportResults(context.Background())
+	assert.NotEmpty(t, results)
 }
