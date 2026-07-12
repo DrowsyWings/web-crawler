@@ -44,9 +44,11 @@ func (m *Memory) Push(ctx context.Context, t Task) (bool, error) {
 }
 
 func (m *Memory) Claim(ctx context.Context) (Task, func(context.Context) error, bool, error) {
+	// Count the claim before dequeuing so Pending never under-counts (a
+	// transient over-count is harmless; an under-count would end the crawl early).
+	atomic.AddInt64(&m.inflight, 1)
 	select {
 	case t := <-m.queue:
-		atomic.AddInt64(&m.inflight, 1)
 		var once sync.Once
 		ack := func(context.Context) error {
 			once.Do(func() { atomic.AddInt64(&m.inflight, -1) })
@@ -54,6 +56,7 @@ func (m *Memory) Claim(ctx context.Context) (Task, func(context.Context) error, 
 		}
 		return t, ack, true, nil
 	default:
+		atomic.AddInt64(&m.inflight, -1)
 		return Task{}, nil, false, nil
 	}
 }

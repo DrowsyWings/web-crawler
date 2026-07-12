@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/DrowsyWings/web-crawler/internal/crawler"
+	"github.com/DrowsyWings/web-crawler/internal/frontier"
 	"github.com/DrowsyWings/web-crawler/internal/stats"
-	"github.com/DrowsyWings/web-crawler/internal/storage"
+	"github.com/DrowsyWings/web-crawler/internal/store"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
-	bolt "go.etcd.io/bbolt"
 	"github.com/spf13/cobra"
 )
 
@@ -38,15 +38,11 @@ var crawlCmd = &cobra.Command{
 			log.Fatal("--url is required")
 		}
 
-		db, err := bolt.Open("crawler.db", 0600, nil)
+		resultStore, err := store.OpenBolt("crawler.db")
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer db.Close()
-
-		if err := storage.Init(db); err != nil {
-			log.Fatal(err)
-		}
+		defer resultStore.Close()
 
 		stats := stats.NewStats()
 
@@ -62,11 +58,12 @@ var crawlCmd = &cobra.Command{
 		}
 
 		httpClient := &http.Client{Timeout: config.Timeout}
-		c := crawler.NewCrawler(config, db, stats, httpClient)
+		f := frontier.NewMemory(1000)
+		c := crawler.NewCrawler(config, f, resultStore, stats, httpClient)
 		c.Start(ctx)
 
 		if outputPath != "" {
-			results, err := storage.ExportResults(db)
+			results, err := resultStore.ExportResults(ctx)
 			if err != nil {
 				log.Printf("Failed to export results: %v\n", err)
 				return
