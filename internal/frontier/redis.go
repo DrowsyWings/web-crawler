@@ -55,6 +55,16 @@ var pendingScript = redis.NewScript(`
 return {redis.call('LLEN', KEYS[1]), redis.call('ZCARD', KEYS[2])}
 `)
 
+// Move tasks whose lease has expired (crashed/stalled workers) back to the queue.
+var reapScript = redis.NewScript(`
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+for _, item in ipairs(expired) do
+	redis.call('ZREM', KEYS[1], item)
+	redis.call('RPUSH', KEYS[2], item)
+end
+return #expired
+`)
+
 func (r *Redis) Push(ctx context.Context, t Task) (bool, error) {
 	payload, err := json.Marshal(t)
 	if err != nil {
@@ -106,6 +116,26 @@ func (r *Redis) Pending(ctx context.Context) (int64, int64, error) {
 	queued, _ := res[0].(int64)
 	inflight, _ := res[1].(int64)
 	return queued, inflight, nil
+}
+
+// Reap requeues expired leases in one pass and returns how many were recovered.
+func (r *Redis) Reap(ctx context.Context) (int, error) {
+	now := time.Now().UnixMilli()
+	return reapScript.Run(ctx, r.client, []string{r.procKey, r.queueKey}, now).Int()
+}
+
+// StartReaper runs Reap on an interval until ctx is cancelled. Run it in a goroutine.
+func (r *Redis) StartReaper(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.Reap(ctx)
+		}
+	}
 }
 
 func (r *Redis) Close() error { return r.client.Close() }
