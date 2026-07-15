@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,10 +15,12 @@ import (
 
 	"github.com/DrowsyWings/web-crawler/internal/crawler"
 	"github.com/DrowsyWings/web-crawler/internal/frontier"
+	"github.com/DrowsyWings/web-crawler/internal/normalize"
 	"github.com/DrowsyWings/web-crawler/internal/stats"
 	"github.com/DrowsyWings/web-crawler/internal/store"
 	"github.com/DrowsyWings/web-crawler/pkg/models"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 )
 
@@ -27,22 +31,24 @@ var (
 	delay      time.Duration
 	timeout    time.Duration
 	outputPath string
+	mode       string
+	redisAddr  string
+	jobID      string
 )
+
+func deriveJobID(seed string) string {
+	sum := sha256.Sum256([]byte(normalize.Normalize(seed)))
+	return hex.EncodeToString(sum[:])[:12]
+}
 
 // crawlCmd represents the crawl command
 var crawlCmd = &cobra.Command{
 	Use:   "crawl",
-	Short: "A brief description of your command",
+	Short: "Crawl a site from a seed URL",
 	Run: func(cmd *cobra.Command, args []string) {
 		if urlFlag == "" {
 			log.Fatal("--url is required")
 		}
-
-		resultStore, err := store.OpenBolt("crawler.db")
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer resultStore.Close()
 
 		stats := stats.NewStats()
 
@@ -55,10 +61,40 @@ var crawlCmd = &cobra.Command{
 			Workers:  workers,
 			Delay:    delay,
 			Timeout:  timeout,
+			JobID:    jobID,
+		}
+		if config.JobID == "" {
+			config.JobID = deriveJobID(config.SeedURL)
 		}
 
+		var f frontier.Frontier
+		var resultStore store.Store
+		var cleanup func()
+
+		switch mode {
+		case "memory":
+			boltStore, err := store.OpenBolt("crawler.db")
+			if err != nil {
+				log.Fatal(err)
+			}
+			f = frontier.NewMemory(1000)
+			resultStore = boltStore
+			cleanup = func() { boltStore.Close() }
+		case "redis":
+			// One client shared by frontier and store; cmd owns closing it.
+			client := redis.NewClient(&redis.Options{Addr: redisAddr})
+			rf := frontier.NewRedis(client, config.JobID, 3*config.Timeout)
+			go rf.StartReaper(ctx, 2*time.Second)
+			f = rf
+			resultStore = store.NewRedis(client, config.JobID)
+			cleanup = func() { client.Close() }
+			log.Printf("redis mode: job %s @ %s", config.JobID, redisAddr)
+		default:
+			log.Fatalf("invalid --mode %q (want memory or redis)", mode)
+		}
+		defer cleanup()
+
 		httpClient := &http.Client{Timeout: config.Timeout}
-		f := frontier.NewMemory(1000)
 		c := crawler.NewCrawler(config, f, resultStore, stats, httpClient)
 		c.Start(ctx)
 
@@ -69,14 +105,14 @@ var crawlCmd = &cobra.Command{
 				return
 			}
 
-			f, err := os.Create(outputPath)
+			out, err := os.Create(outputPath)
 			if err != nil {
 				log.Printf("Failed to create output file: %v\n", err)
 				return
 			}
-			defer f.Close()
+			defer out.Close()
 
-			enc := json.NewEncoder(f)
+			enc := json.NewEncoder(out)
 			enc.SetIndent("", "  ")
 			if err := enc.Encode(results); err != nil {
 				log.Printf("Failed to encode JSON: %v\n", err)
@@ -94,16 +130,9 @@ func init() {
 	crawlCmd.Flags().DurationVar(&delay, "delay", 0, "Delay between requests (e.g. 500ms, 1s)")
 	crawlCmd.Flags().DurationVar(&timeout, "timeout", 10*time.Second, "Per-request HTTP timeout")
 	crawlCmd.Flags().StringVar(&outputPath, "output", "", "Path to JSON file")
+	crawlCmd.Flags().StringVar(&mode, "mode", "memory", "Backend: memory or redis")
+	crawlCmd.Flags().StringVar(&redisAddr, "redis-addr", "localhost:6379", "Redis address (redis mode)")
+	crawlCmd.Flags().StringVar(&jobID, "job-id", "", "Shared job id for cooperating/resumable crawls (default: derived from seed URL)")
 
 	rootCmd.AddCommand(crawlCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// crawlCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// crawlCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
