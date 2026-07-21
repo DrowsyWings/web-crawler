@@ -1,0 +1,27 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  # Scale with: docker compose up --build --scale crawler=3
+  # Every replica shares --job-id, so they cooperate on one crawl via Redis.
+  crawler:
+    build: .
+    depends_on:
+      redis:
+        condition: service_healthy
+    command:
+      - crawl
+      - --mode=redis
+      - --redis-addr=redis:6379
+      - --url=${SEED_URL:-https://example.com}
+      - --job-id=${JOB_ID:-demo}
+      - --depth=${DEPTH:-2}
+      - --workers=${WORKERS:-4}
+      - --delay=${DELAY:-0s}
