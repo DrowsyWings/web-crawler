@@ -3,10 +3,12 @@ package models
 import "time"
 
 type CrawlResult struct {
-	Url       string
-	Title     string
-	Timestamp string
-	Status    string
+	Url         string `json:"url"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Keywords    string `json:"keywords,omitempty"`
+	Timestamp   string `json:"timestamp"`
+	Status      string `json:"status"`
 }
 
 type Config struct {

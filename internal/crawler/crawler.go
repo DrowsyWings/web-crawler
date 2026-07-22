@@ -149,10 +149,12 @@ func (c *Crawler) processTask(ctx context.Context, task frontier.Task) {
 	}
 
 	c.Store.SaveResult(ctx, models.CrawlResult{
-		Url:       task.URL,
-		Title:     result.Title,
-		Timestamp: time.Now().Format(time.RFC3339),
-		Status:    res.Status,
+		Url:         task.URL,
+		Title:       result.Title,
+		Description: result.Description,
+		Keywords:    result.Keywords,
+		Timestamp:   time.Now().Format(time.RFC3339),
+		Status:      res.Status,
 	})
 	c.Stats.CrawledCh <- struct{}{}
 

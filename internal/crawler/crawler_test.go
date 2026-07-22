@@ -125,6 +125,8 @@ func TestProcessTaskSuccess(t *testing.T) {
 	results, _ := store.ExportResults(context.Background())
 	assert.Len(t, results, 1)
 	assert.Equal(t, "Test Page", results[0].Title)
+	assert.Equal(t, "Just testing", results[0].Description)
+	assert.Equal(t, "test,test,test", results[0].Keywords)
 }
 
 func TestProcessTaskDepthExceeded(t *testing.T) {
